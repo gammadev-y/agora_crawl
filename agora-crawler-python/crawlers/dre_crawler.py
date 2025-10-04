@@ -428,25 +428,28 @@ async def _extract_article_content_smart(page) -> List[Dict]:
 
     try:
         # Phase 1: Semantic HTML Detection - Find the main content wrapper
-        wrapper_selector = 'div#b7-b11-InjectHTMLWrapper'
-        if (await page.locator(wrapper_selector).count()) == 0:
-            print("⚠️  Could not find main content wrapper, trying alternative selectors")
-            
-            # Try alternative content selectors
-            content_selectors = [
-                '.content-wrapper',
-                '.law-content',
-                '#content',
-                'main'
-            ]
-            
-            for selector in content_selectors:
-                if (await page.locator(selector).count()) > 0:
-                    wrapper_selector = selector
-                    break
-            else:
-                print("❌ No suitable content wrapper found")
-                return []
+        # Try multiple OutSystems InjectHTMLWrapper patterns (different versions use different IDs)
+        wrapper_selectors = [
+            'div#b7-b11-InjectHTMLWrapper',  # Modern DRE pages
+            'div#b7-b7-InjectHTMLWrapper',   # Older/alternate DRE pages
+            'div[id$="-InjectHTMLWrapper"]', # Any InjectHTMLWrapper
+            'div.texto_sumario',              # Summary text container
+            '.content-wrapper',
+            '.law-content',
+            '#content',
+            'main'
+        ]
+        
+        wrapper_selector = None
+        for selector in wrapper_selectors:
+            if (await page.locator(selector).count()) > 0:
+                wrapper_selector = selector
+                print(f"✅ Found content wrapper: {selector}")
+                break
+        
+        if not wrapper_selector:
+            print("❌ No suitable content wrapper found")
+            return []
 
         print(f"📋 Using content wrapper: {wrapper_selector}")
 
@@ -484,6 +487,15 @@ async def _extract_structured_content(page, wrapper_selector: str) -> str:
         # Get all elements within the wrapper
         all_elements = await page.locator(f'{wrapper_selector} *').all()
         
+        # Fallback: If wrapper has no child elements, get its direct text content
+        # This handles older documents that contain plain text without structured HTML
+        if not all_elements:
+            print("📝 No child elements found, extracting plain text content")
+            wrapper_text = await page.locator(wrapper_selector).text_content()
+            if wrapper_text and wrapper_text.strip():
+                return wrapper_text.strip()
+            return ""
+        
         for element in all_elements:
             try:
                 # Get element details
@@ -513,7 +525,15 @@ async def _extract_structured_content(page, wrapper_selector: str) -> str:
                 print(f"⚠️  Error processing element: {str(e)}")
                 continue
         
-        return '\n\n'.join(markdown_content)
+        # If no structured content was found but we have elements, try getting direct text
+        result = '\n\n'.join(markdown_content) if markdown_content else ""
+        if not result:
+            print("⚠️  No structured content extracted, trying direct text fallback")
+            wrapper_text = await page.locator(wrapper_selector).text_content()
+            if wrapper_text and wrapper_text.strip():
+                return wrapper_text.strip()
+        
+        return result
         
     except Exception as e:
         print(f"❌ Error extracting structured content: {str(e)}")
@@ -633,6 +653,15 @@ async def _process_content_into_articles(structured_content: str) -> List[Dict]:
         # Split content by article markers
         article_sections = structured_content.split('### Artigo')
         
+        # If no article markers found, treat entire content as a single chunk
+        # This handles older documents or summaries without article structure
+        if len(article_sections) == 1 and article_sections[0].strip():
+            print("📝 No article markers found, treating content as single document chunk")
+            return [{
+                'article_number': 0,
+                'content': article_sections[0].strip()
+            }]
+        
         # Handle content before first article (introduction, title, etc.)
         if article_sections[0].strip():
             articles.append({
@@ -658,7 +687,7 @@ async def _process_content_into_articles(structured_content: str) -> List[Dict]:
         return [{
             'article_number': 0,
             'content': structured_content
-        }]
+        }] if structured_content.strip() else []
 
 
 # ============================================================================
