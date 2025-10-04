@@ -28,28 +28,31 @@
 
 ### 2. Workflow Testing
 
-#### Test 1: Extract URL (Workflow 1)
+#### Test 1: Extract URL (Workflow 1) - Modern Document
 ```bash
 python main.py extract-url --url "https://diariodarepublica.pt/dr/detalhe/lei/26-2007-636772"
 ```
 
 **Result:** ✅ **SUCCESS**
 - Extracted 4 articles from Lei n.º 26/2007
-- Created source ID: `1edefc7a-e9fd-4611-830c-e900d2d11e7d`
+- Created source ID: `8164689f-5fbe-403e-89f8-e35d79ad863b`
 - Saved 4 document chunks to database
 - All database operations completed successfully
+- Uses selector: `div#b7-b11-InjectHTMLWrapper`
 
-#### Test 2: Retry Extraction (Workflow 4)
+#### Test 2: Retry Extraction (Workflow 4) - Historical Document
 ```bash
-python main.py retry-extraction --source-id "1edefc7a-e9fd-4611-830c-e900d2d11e7d"
+python main.py retry-extraction --source-id "727bb671-b0c5-4417-bdf3-a251b5f075e6"
 ```
 
-**Result:** ✅ **SUCCESS** (Expected Behavior)
-- Detected existing chunks and warned about duplicates
-- Prevented duplicate chunk creation (correct behavior)
-- Unique constraint `unique_chunk_for_source` working as intended
+**Result:** ✅ **SUCCESS**
+- URL: `https://diariodarepublica.pt/dr/detalhe/decreto/16563-1929-358735`
+- Extracted 1 summary chunk from Decreto n.º 16563 (1929)
+- Uses selector: `div#b7-b7-InjectHTMLWrapper`
+- Plain text extraction fallback working correctly
+- Saved 1 document chunk to database
 
-**Note:** The "failed to save chunks" message is **expected behavior** when chunks already exist. This prevents accidental data duplication.
+**Key Improvement:** Fixed extraction for historical documents (1920s-1940s) that don't have structured article formatting but contain valuable summary text.
 
 ---
 
@@ -171,8 +174,13 @@ SELECT * FROM agora.document_chunks WHERE source_id = '1edefc7a-e9fd-4611-830c-e
 
 | Test | Workflow | URL/ID | Result | Details |
 |------|----------|--------|--------|---------|
-| 1 | `extract-url` | Lei 26/2007 | ✅ Success | 4 articles extracted |
-| 2 | `retry-extraction` | Source ID from Test 1 | ✅ Success | Duplicate prevention working |
+| 1 | `extract-url` | Lei 26/2007 (modern) | ✅ Success | 4 articles extracted |
+| 2 | `retry-extraction` | Decreto 16563/1929 (historical) | ✅ Success | 1 summary chunk extracted |
+
+**Selector Support:**
+- ✅ `div#b7-b11-InjectHTMLWrapper` - Modern DRE pages (2000s+)
+- ✅ `div#b7-b7-InjectHTMLWrapper` - Older DRE pages (1920s-1990s)
+- ✅ Plain text fallback - Documents without structured HTML
 
 ---
 
