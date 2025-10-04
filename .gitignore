@@ -1,0 +1,60 @@
+# Agora DRE Crawler - Root .gitignore
+
+# Development documentation and research (should not be in version control)
+context/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Playwright browsers
+/home/gamma/.cache/ms-playwright/
+
+# Crawlee storage
+storage/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak

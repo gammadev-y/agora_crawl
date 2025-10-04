@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  agora-dre-crawler:
+    build: .
+    env_file:
+      - .env
+    container_name: agora-dre-crawler
+    restart: "no"  # One-time execution
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,134 @@
+name: Agora DRE Crawler - Multi-Workflow System
+
+on:
+  # Manual trigger with three workflows
+  workflow_dispatch:
+    inputs:
+      crawler_mode:
+        description: 'Crawler workflow'
+        required: true
+        default: 'discover-sources'
+        type: choice
+        options:
+          - extract-url
+          - discover-sources
+          - process-unchunked
+      url:
+        description: 'URL for extract-url workflow'
+        required: false
+      start_date:
+        description: 'Start date for discover-sources (YYYY-MM-DD)'
+        required: false
+        default: '2025-01-01'
+      end_date:
+        description: 'End date for discover-sources (YYYY-MM-DD)'
+        required: false
+        default: '2025-01-01'
+      law_type:
+        description: 'Law type for discover-sources'
+        required: false
+        default: 'Lei'
+        type: choice
+        options:
+          - Lei
+          - Decreto-Lei
+          - Portaria
+          - Despacho
+          - Resolução
+      limit:
+        description: 'Limit for process-unchunked workflow'
+        required: false
+        default: '100'
+  
+  # Scheduled discovery run at 3 AM UTC daily
+  schedule:
+    - cron: '0 3 * * *'  # Daily source discovery
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg
+        
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Install Playwright browsers
+      run: |
+        python -m playwright install chromium
+        
+    - name: Create storage directory
+      run: |
+        mkdir -p storage
+        
+    - name: Validate CLI functionality
+      run: |
+        python main.py --help
+        
+    - name: Set crawler parameters for scheduled run
+      if: github.event_name == 'schedule'
+      run: |
+        echo "WORKFLOW=discover-sources" >> $GITHUB_ENV
+        echo "START_DATE=$(date -d 'yesterday' '+%Y-%m-%d')" >> $GITHUB_ENV
+        echo "END_DATE=$(date -d 'yesterday' '+%Y-%m-%d')" >> $GITHUB_ENV
+        echo "LAW_TYPE=Lei" >> $GITHUB_ENV
+        
+    - name: Set crawler parameters for manual run
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        echo "WORKFLOW=${{ github.event.inputs.crawler_mode }}" >> $GITHUB_ENV
+        echo "URL=${{ github.event.inputs.url }}" >> $GITHUB_ENV
+        echo "START_DATE=${{ github.event.inputs.start_date }}" >> $GITHUB_ENV
+        echo "END_DATE=${{ github.event.inputs.end_date }}" >> $GITHUB_ENV
+        echo "LAW_TYPE=${{ github.event.inputs.law_type }}" >> $GITHUB_ENV
+        echo "LIMIT=${{ github.event.inputs.limit }}" >> $GITHUB_ENV
+        
+    - name: Run Workflow 1 - Extract URL
+      if: env.WORKFLOW == 'extract-url'
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      run: |
+        python main.py extract-url --url "$URL"
+        
+    - name: Run Workflow 2 - Discover Sources
+      if: env.WORKFLOW == 'discover-sources'
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      run: |
+        python main.py discover-sources --start-date "$START_DATE" --end-date "$END_DATE" --type "$LAW_TYPE"
+        
+    - name: Run Workflow 3 - Process Unchunked
+      if: env.WORKFLOW == 'process-unchunked'
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      run: |
+        python main.py process-unchunked --limit "$LIMIT"
+        
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: crawler-logs
+        path: |
+          storage/
+          *.log

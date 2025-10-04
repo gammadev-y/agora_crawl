@@ -1,0 +1,3 @@
+crawlee[playwright]
+supabase
+python-dotenv
