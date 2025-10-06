@@ -41,6 +41,54 @@ from lib.supabase_client import get_supabase_client, get_agora_table
 
 
 # ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def parse_portuguese_date(date_string: str) -> Optional[str]:
+    """
+    Parse Portuguese date strings from DRE and convert to ISO format.
+    
+    Handles formats like:
+    - "Diário da República n.º 86/1976, Série I de 1976-04-10"
+    - "1976-04-10"
+    - "10 de abril de 1976"
+    
+    Returns:
+        ISO format date string (YYYY-MM-DD) or None if parsing fails
+    """
+    if not date_string:
+        return None
+    
+    try:
+        # If already in ISO format (YYYY-MM-DD), validate and return
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', date_string.strip()):
+            datetime.strptime(date_string.strip(), '%Y-%m-%d')
+            return date_string.strip()
+        
+        # Extract date from "de YYYY-MM-DD" pattern
+        match = re.search(r'de (\d{4}-\d{2}-\d{2})', date_string)
+        if match:
+            date_str = match.group(1)
+            datetime.strptime(date_str, '%Y-%m-%d')  # Validate
+            return date_str
+        
+        # Extract date from "YYYY-MM-DD" anywhere in string
+        match = re.search(r'(\d{4}-\d{2}-\d{2})', date_string)
+        if match:
+            date_str = match.group(1)
+            datetime.strptime(date_str, '%Y-%m-%d')  # Validate
+            return date_str
+        
+        # If no pattern matches, return None (will be handled gracefully)
+        print(f"⚠️  Could not parse date: {date_string[:100]}")
+        return None
+        
+    except Exception as e:
+        print(f"⚠️  Date parsing error: {str(e)}")
+        return None
+
+
+# ============================================================================
 # URL TYPE DETECTION & SELECTOR ROUTING
 # ============================================================================
 
@@ -814,12 +862,20 @@ async def _save_law_to_database(law_data: Dict, articles: List[Dict], source_url
             }
         }
         
+        # Parse publication date to proper format
+        publication_date = None
+        raw_date = law_data.get('publication_date')
+        if raw_date:
+            publication_date = parse_portuguese_date(raw_date)
+            if not publication_date:
+                print(f"⚠️  Could not parse publication date, setting to NULL: {raw_date[:100]}")
+        
         # UPSERT into agora.sources
         source_data = {
             'main_url': source_url,
             'type_id': 'OFFICIAL_PUBLICATION',
             'author': law_data.get('emitting_entity_name'),
-            'published_at': law_data.get('publication_date'),
+            'published_at': publication_date,  # Now properly formatted or None
             'credibility_score': 1.0,
             'is_official_document': True,
             'translations': translations,

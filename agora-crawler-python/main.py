@@ -27,8 +27,12 @@ def update_job_status(job_id: str, status: str, result_message: str):
     """
     Update the status of a background job in the database.
     
+    **IMPORTANT**: This is a non-critical, optional feature for UI notifications.
+    If job status updates fail, the crawler continues normally. Job notifications
+    should NEVER prevent data extraction and persistence.
+    
     Args:
-        job_id: UUID of the job to update
+        job_id: UUID of the job to update (optional)
         status: Job status ('SUCCESS' or 'FAILED')
         result_message: Message describing the result
     """
@@ -37,14 +41,15 @@ def update_job_status(job_id: str, status: str, result_message: str):
     
     try:
         supabase = get_supabase_client()
-        supabase.table("background_jobs").update({
+        supabase.schema('agora').table("background_jobs").update({
             "status": status,
             "result_message": result_message,
-            "updated_at": "now()"
+            "updated_at": datetime.now().isoformat()
         }).eq("id", job_id).execute()
         print(f"📝 Updated job {job_id} to status: {status}")
     except Exception as e:
-        print(f"⚠️  Warning: Failed to update job status: {str(e)}")
+        # Job notification failures are non-critical - log and continue
+        print(f"⚠️  Warning: Job notification failed (non-critical): {str(e)}")
 
 
 def parse_date(date_string: str) -> date:
