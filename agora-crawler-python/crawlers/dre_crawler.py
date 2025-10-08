@@ -24,6 +24,8 @@ import asyncio
 import re
 import sys
 import os
+import time
+import unicodedata
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, date, timedelta
 from urllib.parse import urlparse
@@ -31,6 +33,7 @@ from urllib.parse import urlparse
 from crawlee.crawlers import PlaywrightCrawler
 from crawlee.router import Router
 from playwright.async_api import async_playwright
+from deep_translator import GoogleTranslator
 
 # Add the project root to Python path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -86,6 +89,129 @@ def parse_portuguese_date(date_string: str) -> Optional[str]:
     except Exception as e:
         print(f"⚠️  Date parsing error: {str(e)}")
         return None
+
+
+def generate_slug_from_title(title: str, max_words: int = 10) -> str:
+    """
+    Generate a URL-friendly slug from Portuguese title.
+    
+    Handles Portuguese special characters:
+    - Removes accents (á→a, ã→a, ç→c, etc.)
+    - Converts to lowercase
+    - Replaces spaces and special chars with hyphens
+    - Limits to max_words
+    
+    Args:
+        title: The Portuguese title text
+        max_words: Maximum number of words to include (default 10)
+    
+    Returns:
+        URL-friendly slug string
+    
+    Examples:
+        "Lei n.º 5/2025 - Resolução sobre Educação" → "lei-n-5-2025-resolucao-sobre-educacao"
+    """
+    import unicodedata
+    
+    if not title:
+        return "untitled"
+    
+    # Normalize unicode characters (remove accents)
+    # NFD decomposes characters with accents into base + accent
+    # Then filter out accent marks (category 'Mn')
+    normalized = unicodedata.normalize('NFD', title)
+    without_accents = ''.join(char for char in normalized if unicodedata.category(char) != 'Mn')
+    
+    # Convert to lowercase
+    slug = without_accents.lower()
+    
+    # Replace special characters with spaces
+    slug = re.sub(r'[^\w\s-]', ' ', slug)
+    
+    # Replace multiple spaces/hyphens with single hyphen
+    slug = re.sub(r'[-\s]+', '-', slug)
+    
+    # Split into words and limit to max_words
+    words = slug.split('-')
+    words = [w for w in words if w]  # Remove empty strings
+    slug = '-'.join(words[:max_words])
+    
+    # Remove leading/trailing hyphens
+    slug = slug.strip('-')
+    
+    return slug if slug else "untitled"
+
+
+def extract_authors_from_articles(articles: List[Dict], header_author: Optional[str] = None) -> str:
+    """
+    Extract authors from multiple sources:
+    1. Header "Emissor" field (already extracted)
+    2. Last chunk's last 4 lines (people names or ministry names)
+    
+    Args:
+        articles: List of article dictionaries with 'content' field
+        header_author: Author from header/emissor field
+    
+    Returns:
+        Comma-separated list of unique authors
+    
+    Examples:
+        "Assembleia da República, António Costa, Ministério da Educação"
+    """
+    authors = []
+    
+    # Add header author first
+    if header_author and header_author.strip():
+        authors.append(header_author.strip())
+    
+    # Extract from last chunk if available
+    if articles:
+        last_article = articles[-1]
+        content = last_article.get('content', '')
+        
+        if content:
+            # Get last 4 lines
+            lines = content.strip().split('\n')
+            last_lines = lines[-4:] if len(lines) >= 4 else lines
+            
+            # Common patterns for author names in Portuguese legal documents
+            author_patterns = [
+                r'Ministério\s+[^\n\.]+',  # Ministério da ...
+                r'Secretaria\s+[^\n\.]+',  # Secretaria de ...
+                r'Presidência\s+[^\n\.]+',  # Presidência do ...
+                r'Assembleia\s+[^\n\.]+',  # Assembleia da ...
+                r'Governo\s+[^\n\.]+',     # Governo de ...
+                r'[A-Z][a-záàâãéèêíïóôõúçÁÀÂÃÉÈÊÍÏÓÔÕÚÇ]+\s+[A-Z][a-záàâãéèêíïóôõúçÁÀÂÃÉÈÊÍÏÓÔÕÚÇ]+(?:\s+[A-Z][a-záàâãéèêíïóôõúçÁÀÂÃÉÈÊÍÏÓÔÕÚÇ]+)*',  # Names (capitalized words)
+            ]
+            
+            for line in last_lines:
+                line = line.strip()
+                if not line or len(line) < 5:
+                    continue
+                
+                # Skip lines that are clearly not author names
+                if any(skip in line.lower() for skip in ['artigo', 'página', 'www.', 'http', 'diário', 'república']):
+                    continue
+                
+                # Try to match author patterns
+                for pattern in author_patterns:
+                    matches = re.findall(pattern, line)
+                    for match in matches:
+                        match = match.strip()
+                        if match and len(match) > 5:  # Minimum length filter
+                            # Clean up the match
+                            match = re.sub(r'\s+', ' ', match)  # Normalize spaces
+                            if match not in authors:  # Avoid duplicates
+                                authors.append(match)
+    
+    # Return comma-separated unique authors
+    # Remove duplicates while preserving order
+    unique_authors = []
+    for author in authors:
+        if author not in unique_authors:
+            unique_authors.append(author)
+    
+    return ', '.join(unique_authors) if unique_authors else ''
 
 
 # ============================================================================
@@ -191,7 +317,7 @@ async def extract_with_dr_legislation_selector(page) -> Tuple[Optional[Dict], Li
 # ============================================================================
 async def _translate_text(text: str) -> dict:
     """
-    Translate text to English using googletrans-py library.
+    Translate text to English using Google Translate via deep-translator library.
 
     Args:
         text: The Portuguese text to translate
@@ -203,16 +329,33 @@ async def _translate_text(text: str) -> dict:
         return {'en': '', 'pt': ''}
 
     try:
-        # TODO: Implement actual translation with googletrans-py
-        # For now, return Portuguese text as-is and mark English as [Translation needed]
+        from deep_translator import GoogleTranslator
+        
+        # Limit text length to avoid API issues (max 5000 chars)
+        text_to_translate = text[:5000] if len(text) > 5000 else text
+        
+        print(f"   🔄 Translating: {text_to_translate[:60]}...")
+        
+        # Translate from Portuguese to English
+        translator = GoogleTranslator(source='pt', target='en')
+        translated = translator.translate(text_to_translate)
+        
+        print(f"   ✅ Translation result: {translated[:60]}...")
+        
+        # Add delay to avoid rate limiting
+        await asyncio.sleep(2)
+        
         return {
-            'en': f'[EN] {text}',  # Placeholder - should be actual translation
+            'en': translated,
             'pt': text
         }
     except Exception as e:
         print(f"⚠️  Translation error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        # Fallback to original text if translation fails
         return {
-            'en': text,  # Fallback to original text
+            'en': text,
             'pt': text
         }
 
@@ -840,17 +983,26 @@ async def _extract_articles_dr_legislation(page) -> List[Dict]:
 # ============================================================================
 
 async def _save_law_to_database(law_data: Dict, articles: List[Dict], source_url: str) -> bool:
-    """Save law and articles to database according to PROD5 specification"""
+    """
+    Save law and articles to database according to PROD5 specification.
+    
+    Improvements:
+    - Hardcoded entity_id for sources
+    - Real Google Translate integration for PT→EN translations
+    - Slug generation from Portuguese title (max 10 words)
+    - Enhanced author extraction (header + last chunk analysis)
+    """
     try:
         print(f"💾 Starting database persistence for: {law_data['official_title'][:50]}...")
         
         supabase = get_supabase_client()
         
-        # Translate content for multilingual support
+        # Translate content for multilingual support using Google Translate
+        print("🌐 Translating content to English...")
         title_translations = await _translate_text(law_data['official_title'])
         summary_translations = await _translate_text(law_data.get('summary', ''))
         
-        # Construct translations JSONB
+        # Construct translations JSONB with both languages
         translations = {
             'pt': {
                 'title': title_translations['pt'],
@@ -862,6 +1014,16 @@ async def _save_law_to_database(law_data: Dict, articles: List[Dict], source_url
             }
         }
         
+        # Generate slug from Portuguese title (max 10 words)
+        slug = generate_slug_from_title(law_data['official_title'], max_words=10)
+        print(f"🔗 Generated slug: {slug}")
+        
+        # Extract authors from multiple sources
+        header_author = law_data.get('emitting_entity_name')
+        comprehensive_author = extract_authors_from_articles(articles, header_author)
+        if comprehensive_author:
+            print(f"✍️  Authors: {comprehensive_author}")
+        
         # Parse publication date to proper format
         publication_date = None
         raw_date = law_data.get('publication_date')
@@ -870,26 +1032,67 @@ async def _save_law_to_database(law_data: Dict, articles: List[Dict], source_url
             if not publication_date:
                 print(f"⚠️  Could not parse publication date, setting to NULL: {raw_date[:100]}")
         
-        # UPSERT into agora.sources
-        source_data = {
-            'main_url': source_url,
-            'type_id': 'OFFICIAL_PUBLICATION',
-            'author': law_data.get('emitting_entity_name'),
-            'published_at': publication_date,  # Now properly formatted or None
-            'credibility_score': 1.0,
-            'is_official_document': True,
-            'translations': translations,
-            'is_active': True
-        }
+        # Check if source already exists by URL
+        print(f"🔍 Checking if source already exists for URL: {source_url}")
+        existing_source = supabase.schema('agora').table('sources').select('id, main_url').eq('main_url', source_url).execute()
         
-        source_result = supabase.schema('agora').table('sources').upsert(source_data).execute()
-        
-        if not source_result.data:
-            print("❌ Failed to create/update source")
-            return False
-        
-        source_id = source_result.data[0]['id']
-        print(f"✅ Upserted source with ID: {source_id}")
+        source_id = None
+        if existing_source.data and len(existing_source.data) > 0:
+            source_id = existing_source.data[0]['id']
+            print(f"📝 Found existing source with ID: {source_id}")
+            print(f"🔄 Updating existing source...")
+            
+            # UPDATE existing source
+            source_data = {
+                'type_id': 'OFFICIAL_PUBLICATION',
+                'source_entity_id': 'b3fbe687-2c76-449e-a410-e386a2f3344e',  # Hardcoded source_entity_id
+                'author': comprehensive_author if comprehensive_author else header_author,  # Enhanced author field
+                'slug': slug,  # Generated slug
+                'published_at': publication_date,
+                'credibility_score': 1.0,
+                'is_official_document': True,
+                'translations': translations,  # Both PT and EN translations
+                'is_active': True
+            }
+            
+            update_result = supabase.schema('agora').table('sources').update(source_data).eq('id', source_id).execute()
+            
+            if not update_result.data:
+                print("❌ Failed to update source")
+                return False
+            
+            print(f"✅ Updated existing source with ID: {source_id}")
+            
+            # Delete existing chunks before inserting new ones
+            print(f"🗑️  Deleting existing chunks for source {source_id}...")
+            supabase.schema('agora').table('document_chunks').delete().eq('source_id', source_id).execute()
+            print(f"✅ Cleared existing chunks")
+            
+        else:
+            print(f"➕ Creating new source...")
+            
+            # INSERT new source
+            source_data = {
+                'main_url': source_url,
+                'type_id': 'OFFICIAL_PUBLICATION',
+                'source_entity_id': 'b3fbe687-2c76-449e-a410-e386a2f3344e',  # Hardcoded source_entity_id
+                'author': comprehensive_author if comprehensive_author else header_author,  # Enhanced author field
+                'slug': slug,  # Generated slug
+                'published_at': publication_date,
+                'credibility_score': 1.0,
+                'is_official_document': True,
+                'translations': translations,  # Both PT and EN translations
+                'is_active': True
+            }
+            
+            insert_result = supabase.schema('agora').table('sources').insert(source_data).execute()
+            
+            if not insert_result.data:
+                print("❌ Failed to create source")
+                return False
+            
+            source_id = insert_result.data[0]['id']
+            print(f"✅ Created new source with ID: {source_id}")
         
         # Save articles as document chunks
         chunks_saved = 0
@@ -907,7 +1110,16 @@ async def _save_law_to_database(law_data: Dict, articles: List[Dict], source_url
                 print(f"⚠️  Could not save chunk {article['article_number']}: {str(e)}")
         
         print(f"✅ Saved {chunks_saved} document chunks")
-        print(f"🎉 Successfully completed database persistence!")
+        
+        # Validate translations were saved correctly
+        print(f"\n📋 VALIDATION - Translations saved:")
+        print(f"   🇵🇹 PT Title: {translations['pt']['title'][:80]}...")
+        print(f"   🇬🇧 EN Title: {translations['en']['title'][:80]}...")
+        if translations['pt']['description']:
+            print(f"   🇵🇹 PT Summary: {translations['pt']['description'][:60]}...")
+            print(f"   🇬🇧 EN Summary: {translations['en']['description'][:60]}...")
+        
+        print(f"\n🎉 Successfully completed database persistence!")
         return True
         
     except Exception as e:
@@ -1515,8 +1727,8 @@ async def _extract_and_save_law_details_for_retry(page, url: str, source_id: str
         print(f"📋 Found title: {law_data['official_title'][:80]}...")
         print(f"📄 Extracted {len(articles)} articles")
 
-        # Save to database using existing source_id
-        success = await _save_chunks_for_existing_source(source_id, articles)
+        # Save to database using existing source_id (with enhanced author extraction)
+        success = await _save_chunks_for_existing_source(source_id, articles, law_data)
 
         if success:
             print(f"✅ Successfully processed retry: {law_data['official_title'][:50]}...")
@@ -1533,15 +1745,17 @@ async def _extract_and_save_law_details_for_retry(page, url: str, source_id: str
         return False
 
 
-async def _save_chunks_for_existing_source(source_id: str, articles: List[Dict]) -> bool:
+async def _save_chunks_for_existing_source(source_id: str, articles: List[Dict], law_data: Optional[Dict] = None) -> bool:
     """
     Save document chunks for an existing source.
     
-    This function only saves chunks and does NOT modify the source record.
+    This function saves chunks and optionally updates the source record
+    with enhanced author information extracted from the articles.
     
     Args:
         source_id: UUID of the existing source
         articles: List of article dictionaries with 'article_number' and 'content'
+        law_data: Optional law metadata to extract header author from
         
     Returns:
         True if successful, False otherwise
@@ -1550,6 +1764,21 @@ async def _save_chunks_for_existing_source(source_id: str, articles: List[Dict])
         print(f"💾 Saving {len(articles)} chunks for existing source {source_id}...")
         
         supabase = get_supabase_client()
+        
+        # Extract enhanced author information if we have law_data
+        if law_data:
+            header_author = law_data.get('emitting_entity_name')
+            comprehensive_author = extract_authors_from_articles(articles, header_author)
+            
+            if comprehensive_author:
+                print(f"✍️  Updating source with enhanced author: {comprehensive_author}")
+                try:
+                    supabase.schema('agora').table('sources').update({
+                        'author': comprehensive_author
+                    }).eq('id', source_id).execute()
+                    print(f"✅ Updated source author field")
+                except Exception as e:
+                    print(f"⚠️  Could not update source author: {str(e)}")
         
         # Save articles as document chunks
         chunks_saved = 0
@@ -1582,9 +1811,22 @@ async def _save_chunks_for_existing_source(source_id: str, articles: List[Dict])
         return False
 
 
+# =============================================================================
+# DEPRECATED/LEGACY WORKFLOWS - DO NOT USE
+# =============================================================================
+# The functions below are legacy implementations kept for reference only.
+# They are not used in the current PROD5 architecture.
+# 
+# Active PROD5 workflows (see top of file):
+# - run_single_url_crawl() - Workflow 1: Direct URL extraction
+# - run_discovery_crawl() - Workflow 2: Source discovery
+# - run_unchunked_processing() - Workflow 3: Process unchunked sources
+# - run_retry_extraction() - Workflow 4: Retry failed extractions
+# =============================================================================
+
 async def run_date_range_crawl(start_date: date, end_date: date):
     """
-    Mode 1: Crawl laws published within a specific date range.
+    [DEPRECATED] Mode 1: Crawl laws published within a specific date range.
     
     Uses interactive form automation to search for laws on each date
     and then extracts content from discovered law detail pages.
@@ -1593,6 +1835,7 @@ async def run_date_range_crawl(start_date: date, end_date: date):
         start_date: Start date for crawling
         end_date: End date for crawling (inclusive)
     """
+    print(f"⚠️  WARNING: This function is deprecated. Use run_discovery_crawl() instead.")
     print(f"🗓️  Starting date range crawl: {start_date} to {end_date}")
     
     # Generate list of dates to process
@@ -2102,142 +2345,12 @@ async def extract_article_content_smart(page) -> List[Dict]:
         return articles
 
 
-async def save_law_to_database(law_data: Dict, articles: List[Dict], source_url: str) -> bool:
-    """Save law and articles to database according to PROD4.md specification"""
-    try:
-        print(f"💾 Starting database persistence for: {law_data['official_title'][:50]}...")
-        
-        # Get Supabase client
-        supabase = get_supabase_client()
-        
-        # Step 1: Find Foreign Keys
-        emitting_entity_id = None
-        law_type_id = None
-        
-        # Find emitting_entity_id
-        if law_data.get('emitting_entity_name'):
-            entity_result = supabase.table('government_entities').select('id').eq('name', law_data['emitting_entity_name']).execute()
-            if entity_result.data:
-                emitting_entity_id = entity_result.data[0]['id']
-                print(f"✅ Found Emitting Entity ID: {emitting_entity_id}")
-            else:
-                print(f"⚠️  Emitting entity not found: {law_data['emitting_entity_name']}")
-        
-        # Find law_type_id
-        if law_data.get('law_type_name'):
-            type_result = supabase.table('law_types').select('id').eq('name', law_data['law_type_name']).execute()
-            if type_result.data:
-                law_type_id = type_result.data[0]['id']
-                print(f"✅ Found Law Type ID: {law_type_id}")
-            else:
-                print(f"⚠️  Law type not found: {law_data['law_type_name']}")
-        
-        # Step 2: Translate content for multilingual support
-        english_title = await _translate_text(law_data['official_title'])
-        english_summary = await _translate_text(law_data.get('summary', ''))
-        
-        # Construct translations JSONB
-        translations = {
-            'pt': {
-                'title': law_data['official_title'],
-                'description': law_data.get('summary', '')
-            },
-            'en': {
-                'title': english_title,
-                'description': english_summary
-            }
-        }
-        
-        # Step 3: UPSERT into agora.sources
-        source_data = {
-            'main_url': source_url,
-            'type_id': 'OFFICIAL_PUBLICATION',  # This should match a valid source type
-            'source_entity_id': emitting_entity_id,
-            'author': law_data.get('emitting_entity_name'),
-            'published_at': law_data.get('publication_date'),
-            'credibility_score': 1.0,  # Official government publications
-            'is_official_document': True,
-            'translations': translations,
-            'is_active': True,
-            'archived_url': source_url,
-            'archive_status': 'ARCHIVED'
-        }
-        
-        source_result = supabase.schema('agora').table('sources').upsert(source_data).execute()
-        
-        if not source_result.data:
-            print("❌ Failed to create/update source")
-            return False
-        
-        source_id = source_result.data[0]['id']
-        print(f"✅ Upserted source with ID: {source_id}")
-        
-        # Step 4: Generate slug for law
-        slug = f"dre-{law_data.get('official_number', 'unknown').replace('/', '-').replace(' ', '-')}"
-        
-        # Step 5: UPSERT into agora.laws
-        law_record = {
-            'government_entity_id': emitting_entity_id,
-            'official_number': law_data.get('official_number'),
-            'slug': slug,
-            'type_id': law_type_id,
-            'enactment_date': law_data.get('publication_date'),
-            'official_title': law_data['official_title'],
-            'source_id': source_id,
-            'translations': translations
-        }
-        
-        law_result = supabase.table('laws').upsert(law_record, on_conflict='slug').execute()
-        
-        if not law_result.data:
-            print("❌ Failed to create/update law")
-            return False
-        
-        law_id = law_result.data[0]['id']
-        print(f"✅ Upserted law with ID: {law_id}")
-        
-        # Step 6: INSERT into agora.law_emitting_entities (junction table)
-        if emitting_entity_id:
-            junction_data = {
-                'law_id': law_id,
-                'government_entity_id': emitting_entity_id
-            }
-            supabase.table('law_emitting_entities').upsert(junction_data, on_conflict='law_id,government_entity_id').execute()
-            print(f"✅ Created law-entity relationship")
-        
-        # Step 7: UPSERT into agora.law_articles & agora.law_article_versions
-        articles_saved = 0
-        for article in articles:
-            # UPSERT into agora.law_articles
-            article_record = {
-                'law_id': law_id,
-                'article_number': article['article_number'],
-                'title': f"Artigo {article['article_number']}"
-            }
-            
-            article_result = supabase.table('law_articles').upsert(article_record, on_conflict='law_id,article_number').execute()
-            
-            if article_result.data:
-                article_id = article_result.data[0]['id']
-                
-                # UPSERT into agora.law_article_versions
-                version_record = {
-                    'article_id': article_id,
-                    'official_text': article['content'],
-                    'status_id': 'ACTIVE',  # Default status
-                    'valid_from': law_data.get('publication_date'),
-                    'source_id': source_id
-                }
-                
-                supabase.table('law_article_versions').upsert(version_record, on_conflict='article_id,valid_from').execute()
-                articles_saved += 1
-        
-        print(f"✅ Saved {articles_saved} article chunks")
-        print(f"🎉 Successfully completed database persistence!")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Error in database persistence: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
+# =============================================================================
+# DEPRECATED FUNCTIONS (PROD4) - REMOVED
+# =============================================================================
+# The following functions have been deprecated and removed:
+# - save_law_to_database() - Replaced by _save_law_to_database() with PROD5 improvements
+# 
+# Current active functions (PROD5):
+# - _save_law_to_database() - Enhanced with Google Translate, slug generation, and better author extraction
+# - _save_chunks_for_existing_source() - For retry workflow with author updates

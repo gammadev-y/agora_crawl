@@ -2,6 +2,7 @@ import asyncio
 import argparse
 import sys
 import os
+import json
 from datetime import datetime, date
 from typing import List
 
@@ -64,6 +65,150 @@ def validate_date_range(start_date: date, end_date: date):
     """Validate that start_date is not after end_date"""
     if start_date > end_date:
         raise ValueError("Start date must be before or equal to end date")
+
+
+def handle_describe_workflows(args):
+    """
+    Handle the describe-workflows command.
+    
+    This command outputs a JSON manifest describing all available crawler workflows.
+    The manifest is consumed by the Agora Next.js frontend to dynamically build
+    the UI for triggering crawls.
+    
+    This is the single source of truth for workflow definitions.
+    """
+    workflows = [
+        {
+            "id": "extract-url",
+            "name": "Extract Content from URL",
+            "description": "Performs a deep extraction on a single, specific law URL. Creates or updates the source record with full metadata (translations, slug, authors) and extracts all articles as document chunks.",
+            "workflow_number": 1,
+            "inputs": [
+                {
+                    "id": "url",
+                    "label": "Law URL",
+                    "type": "text",
+                    "required": True,
+                    "placeholder": "https://diariodarepublica.pt/dr/detalhe/lei/...",
+                    "help_text": "Direct URL to a law detail page on Diário da República"
+                },
+                {
+                    "id": "job_id",
+                    "label": "Job ID (Optional)",
+                    "type": "text",
+                    "required": False,
+                    "placeholder": "UUID for job tracking",
+                    "help_text": "Optional UUID for background job status tracking"
+                }
+            ],
+            "output": "Creates/updates one source record with full metadata and associated document chunks"
+        },
+        {
+            "id": "discover-sources",
+            "name": "Discover New Sources",
+            "description": "Scans a date range for new laws of a specific type and creates basic source records. This is a two-stage process: discovery creates sources, then use process-unchunked to extract content.",
+            "workflow_number": 2,
+            "inputs": [
+                {
+                    "id": "start_date",
+                    "label": "Start Date",
+                    "type": "date",
+                    "required": True,
+                    "placeholder": "YYYY-MM-DD",
+                    "help_text": "Start date for the search range (inclusive)"
+                },
+                {
+                    "id": "end_date",
+                    "label": "End Date",
+                    "type": "date",
+                    "required": True,
+                    "placeholder": "YYYY-MM-DD",
+                    "help_text": "End date for the search range (inclusive)"
+                },
+                {
+                    "id": "law_type",
+                    "label": "Law Type",
+                    "type": "select",
+                    "required": True,
+                    "options": [
+                        {"value": "Lei", "label": "Lei (Law)"},
+                        {"value": "Decreto-Lei", "label": "Decreto-Lei (Decree-Law)"},
+                        {"value": "Portaria", "label": "Portaria (Ordinance)"},
+                        {"value": "Resolução", "label": "Resolução (Resolution)"},
+                        {"value": "Despacho", "label": "Despacho (Dispatch)"},
+                        {"value": "Decreto", "label": "Decreto (Decree)"}
+                    ],
+                    "help_text": "Type of legal document to search for"
+                },
+                {
+                    "id": "job_id",
+                    "label": "Job ID (Optional)",
+                    "type": "text",
+                    "required": False,
+                    "placeholder": "UUID for job tracking",
+                    "help_text": "Optional UUID for background job status tracking"
+                }
+            ],
+            "output": "Multiple source records with basic metadata (no content chunks yet)"
+        },
+        {
+            "id": "process-unchunked",
+            "name": "Process Unchunked Sources",
+            "description": "Finds sources in the database without content chunks and extracts them. Use this after discover-sources or to retry failed extractions in batch.",
+            "workflow_number": 3,
+            "inputs": [
+                {
+                    "id": "limit",
+                    "label": "Number of Sources",
+                    "type": "number",
+                    "required": True,
+                    "default": 100,
+                    "min": 1,
+                    "max": 1000,
+                    "placeholder": "100",
+                    "help_text": "Maximum number of sources to process in this batch"
+                },
+                {
+                    "id": "job_id",
+                    "label": "Job ID (Optional)",
+                    "type": "text",
+                    "required": False,
+                    "placeholder": "UUID for job tracking",
+                    "help_text": "Optional UUID for background job status tracking"
+                }
+            ],
+            "output": "Extracts content for multiple sources, creating document chunks for each"
+        },
+        {
+            "id": "retry-extraction",
+            "name": "Retry Extraction for Source",
+            "description": "Re-runs the full extraction process for a specific source ID. Updates the source metadata and re-extracts all content chunks. Useful for fixing failed extractions or updating outdated content.",
+            "workflow_number": 4,
+            "inputs": [
+                {
+                    "id": "source_id",
+                    "label": "Source ID",
+                    "type": "text",
+                    "required": True,
+                    "placeholder": "UUID of the source",
+                    "help_text": "The UUID of the source to retry extraction for (found in agora.sources table)"
+                },
+                {
+                    "id": "job_id",
+                    "label": "Job ID (Optional)",
+                    "type": "text",
+                    "required": False,
+                    "placeholder": "UUID for job tracking",
+                    "help_text": "Optional UUID for background job status tracking"
+                }
+            ],
+            "output": "Updates existing source record and re-creates all document chunks"
+        }
+    ]
+    
+    # Output the manifest as JSON
+    print(json.dumps(workflows, indent=2))
+    return True
 
 
 async def handle_extract_url(args):
@@ -168,6 +313,13 @@ Examples:
         required=True
     )
     
+    # Sub-parser for describe-workflows (Manifest Generator)
+    parser_describe = subparsers.add_parser(
+        'describe-workflows',
+        help='Output the workflow manifest as JSON'
+    )
+    parser_describe.set_defaults(func=handle_describe_workflows)
+    
     # Sub-parser for extract-url (Workflow 1)
     parser_extract_url = subparsers.add_parser(
         'extract-url',
@@ -266,6 +418,11 @@ async def main():
     # Set up argument parsing
     parser = setup_parser()
     args = parser.parse_args()
+    
+    # Special case: describe-workflows is synchronous and outputs JSON only
+    if args.command == 'describe-workflows':
+        args.func(args)
+        return
     
     # Print header
     print("🚀 Agora DRE Crawler - Multi-Workflow CLI Tool")

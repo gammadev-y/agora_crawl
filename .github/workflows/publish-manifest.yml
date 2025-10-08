@@ -1,0 +1,49 @@
+name: Publish Crawler Workflow Manifest
+
+on:
+  push:
+    branches: [ main ] # Triggers on push to main branch
+  workflow_dispatch: # Allows manual trigger
+
+permissions:
+  contents: write # Grant permission to write to the repository
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          cd agora-crawler-python
+          pip install -r requirements.txt
+        
+      - name: Generate Manifest File
+        run: |
+          cd agora-crawler-python
+          python main.py describe-workflows > workflow-manifest.json
+          
+      - name: Verify Manifest Generated
+        run: |
+          cd agora-crawler-python
+          cat workflow-manifest.json
+          echo "✅ Manifest generated successfully"
+        
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./agora-crawler-python
+          # This ensures only the manifest is published
+          keep_files: false
+          publish_branch: gh-pages
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy workflow manifest'

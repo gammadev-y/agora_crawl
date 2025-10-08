@@ -54,6 +54,9 @@ logs/
 # Crawlee storage
 storage/
 
+# Generated files
+workflow-manifest.json
+
 # Temporary files
 *.tmp
 *.temp
