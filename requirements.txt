@@ -1,0 +1,4 @@
+crawlee[playwright]
+supabase
+python-dotenv
+deep-translator

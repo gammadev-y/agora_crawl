@@ -1,0 +1,146 @@
+[
+  {
+    "id": "extract-url",
+    "name": "Extract Content from URL",
+    "description": "Performs a deep extraction on a single, specific law URL. Creates or updates the source record with full metadata (translations, slug, authors) and extracts all articles as document chunks.",
+    "workflow_number": 1,
+    "inputs": [
+      {
+        "id": "url",
+        "label": "Law URL",
+        "type": "text",
+        "required": true,
+        "placeholder": "https://diariodarepublica.pt/dr/detalhe/lei/...",
+        "help_text": "Direct URL to a law detail page on Di\u00e1rio da Rep\u00fablica"
+      },
+      {
+        "id": "job_id",
+        "label": "Job ID (Optional)",
+        "type": "text",
+        "required": false,
+        "placeholder": "UUID for job tracking",
+        "help_text": "Optional UUID for background job status tracking"
+      }
+    ],
+    "output": "Creates/updates one source record with full metadata and associated document chunks"
+  },
+  {
+    "id": "discover-sources",
+    "name": "Discover New Sources",
+    "description": "Scans a date range for new laws of a specific type and creates basic source records. This is a two-stage process: discovery creates sources, then use process-unchunked to extract content.",
+    "workflow_number": 2,
+    "inputs": [
+      {
+        "id": "start_date",
+        "label": "Start Date",
+        "type": "date",
+        "required": true,
+        "placeholder": "YYYY-MM-DD",
+        "help_text": "Start date for the search range (inclusive)"
+      },
+      {
+        "id": "end_date",
+        "label": "End Date",
+        "type": "date",
+        "required": true,
+        "placeholder": "YYYY-MM-DD",
+        "help_text": "End date for the search range (inclusive)"
+      },
+      {
+        "id": "law_type",
+        "label": "Law Type",
+        "type": "select",
+        "required": true,
+        "options": [
+          {
+            "value": "Lei",
+            "label": "Lei (Law)"
+          },
+          {
+            "value": "Decreto-Lei",
+            "label": "Decreto-Lei (Decree-Law)"
+          },
+          {
+            "value": "Portaria",
+            "label": "Portaria (Ordinance)"
+          },
+          {
+            "value": "Resolu\u00e7\u00e3o",
+            "label": "Resolu\u00e7\u00e3o (Resolution)"
+          },
+          {
+            "value": "Despacho",
+            "label": "Despacho (Dispatch)"
+          },
+          {
+            "value": "Decreto",
+            "label": "Decreto (Decree)"
+          }
+        ],
+        "help_text": "Type of legal document to search for"
+      },
+      {
+        "id": "job_id",
+        "label": "Job ID (Optional)",
+        "type": "text",
+        "required": false,
+        "placeholder": "UUID for job tracking",
+        "help_text": "Optional UUID for background job status tracking"
+      }
+    ],
+    "output": "Multiple source records with basic metadata (no content chunks yet)"
+  },
+  {
+    "id": "process-unchunked",
+    "name": "Process Unchunked Sources",
+    "description": "Finds sources in the database without content chunks and extracts them. Use this after discover-sources or to retry failed extractions in batch.",
+    "workflow_number": 3,
+    "inputs": [
+      {
+        "id": "limit",
+        "label": "Number of Sources",
+        "type": "number",
+        "required": true,
+        "default": 100,
+        "min": 1,
+        "max": 1000,
+        "placeholder": "100",
+        "help_text": "Maximum number of sources to process in this batch"
+      },
+      {
+        "id": "job_id",
+        "label": "Job ID (Optional)",
+        "type": "text",
+        "required": false,
+        "placeholder": "UUID for job tracking",
+        "help_text": "Optional UUID for background job status tracking"
+      }
+    ],
+    "output": "Extracts content for multiple sources, creating document chunks for each"
+  },
+  {
+    "id": "retry-extraction",
+    "name": "Retry Extraction for Source",
+    "description": "Re-runs the full extraction process for a specific source ID. Updates the source metadata and re-extracts all content chunks. Useful for fixing failed extractions or updating outdated content.",
+    "workflow_number": 4,
+    "inputs": [
+      {
+        "id": "source_id",
+        "label": "Source ID",
+        "type": "text",
+        "required": true,
+        "placeholder": "UUID of the source",
+        "help_text": "The UUID of the source to retry extraction for (found in agora.sources table)"
+      },
+      {
+        "id": "job_id",
+        "label": "Job ID (Optional)",
+        "type": "text",
+        "required": false,
+        "placeholder": "UUID for job tracking",
+        "help_text": "Optional UUID for background job status tracking"
+      }
+    ],
+    "output": "Updates existing source record and re-creates all document chunks"
+  }
+]
